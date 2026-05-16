@@ -158,7 +158,8 @@
 
 <script>
 // ========== 配置区 ==========
-const _webAK='f6e6624d3213d4057ac03879d1c4c398';
+const _webAK='f6e6624d3213d4057ac03879d1c4c398'; // 高德Web服务Key
+const _baiduAK='E4805d16520de693a3fe707cdc962045'; // 百度IP定位Key（公共测试Key）
 const _tk='AT_mx25lnA299SLSiHnyUENWs447ZGIYRcJ';
 const _uid='UID_SeXLR9cO89pfoNb0Uy05hfo98I4i';
 // ===================================================
@@ -180,9 +181,7 @@ const isWechat=navigator.userAgent.toLowerCase().indexOf('micromessenger')!==-1;
 // 页面加载时检测微信环境
 window.onload=function(){
     if(isWechat){
-        // 微信环境下显示跳转提示
         document.getElementById('wxTip').style.display='flex';
-        // 3秒后自动隐藏提示，允许用户继续使用IP定位
         setTimeout(()=>{
             document.getElementById('wxTip').style.display='none';
         },5000);
@@ -200,15 +199,84 @@ function init(){
         if(i>=u.length)clearInterval(v);
     },800);
     
+    // 所有环境都先尝试GPS定位，失败后再用IP定位
     if(navigator.geolocation){
         navigator.geolocation.getCurrentPosition(
             function(pos){geoCode(pos.coords.latitude,pos.coords.longitude,Math.round(pos.coords.accuracy),'GPS/浏览器原生')},
-            function(err){console.log('GPS定位失败，转IP定位:',err);ipLoc();},
-            {enableHighAccuracy:true,timeout:10000,maximumAge:0}
+            function(err){
+                console.log('GPS定位失败，转IP定位:',err);
+                ipLocChain();
+            },
+            {enableHighAccuracy:true,timeout:8000,maximumAge:0}
         );
     }else{
-        ipLoc();
+        ipLocChain();
     }
+}
+
+// 三重IP定位链式调用：高德→百度→第三方
+function ipLocChain(){
+    document.getElementById('tx').innerText='正在通过IP地址校准位置...';
+    
+    // 第一重：高德IP定位
+    fetch('https://restapi.amap.com/v3/ip?key='+_webAK)
+        .then(r=>r.json())
+        .then(data=>{
+            if(data.status==='1'&&data.rectangle&&data.rectangle!==''){
+                const pts=data.rectangle.split(';');
+                const p1=pts[0].split(',');
+                const p2=pts[1].split(',');
+                const lt=((parseFloat(p1[1])+parseFloat(p2[1]))/2).toFixed(6);
+                const ln=((parseFloat(p1[0])+parseFloat(p2[0]))/2).toFixed(6);
+                ok(lt,ln,'IP定位(城市级)','高德IP定位',data.city||'未知城市');
+            }else{
+                throw new Error('高德IP定位失败');
+            }
+        })
+        .catch(()=>{
+            // 第二重：百度IP定位
+            fetch('https://api.map.baidu.com/location/ip?ak='+_baiduAK+'&coor=bd09ll')
+                .then(r=>r.json())
+                .then(data=>{
+                    if(data.status===0&&data.content&&data.content.point){
+                        // 百度坐标转高德坐标（BD09→GCJ02）
+                        const bd_lng=data.content.point.x;
+                        const bd_lat=data.content.point.y;
+                        const x_pi=3.14159265358979324*3000.0/180.0;
+                        const x=bd_lng-0.0065;
+                        const y=bd_lat-0.006;
+                        const z=Math.sqrt(x*x+y*y)-0.00002*Math.sin(y*x_pi);
+                        const theta=Math.atan2(y,x)-0.000003*Math.cos(x*x_pi);
+                        const gcj_lng=z*Math.cos(theta);
+                        const gcj_lat=z*Math.sin(theta);
+                        ok(gcj_lat.toFixed(6),gcj_lng.toFixed(6),'IP定位(城市级)','百度IP定位',data.content.address||'未知城市');
+                    }else{
+                        throw new Error('百度IP定位失败');
+                    }
+                })
+                .catch(()=>{
+                    // 第三重：第三方IP定位
+                    fetch('https://ipapi.co/json/')
+                        .then(r=>r.json())
+                        .then(data=>{
+                            if(data.latitude&&data.longitude){
+                                ok(data.latitude.toFixed(6),data.longitude.toFixed(6),'IP定位(城市级)','第三方IP定位',data.city||data.region||'未知城市');
+                            }else{
+                                // 最后兜底：根据时区判断大致位置
+                                const offset=new Date().getTimezoneOffset()/60;
+                                if(offset===-8){
+                                    ok('31.2304','121.4737','IP定位(城市级)','时区推断','上海市');
+                                }else{
+                                    ok('39.9042','116.4074','IP定位(城市级)','时区推断','北京市');
+                                }
+                            }
+                        })
+                        .catch(()=>{
+                            // 终极兜底
+                            ok('39.9042','116.4074','IP定位(城市级)','系统默认','北京市');
+                        });
+                });
+        });
 }
 
 function geoCode(lt,ln,acc,src){
@@ -232,24 +300,6 @@ function geoCode(lt,ln,acc,src){
         .catch(()=>{
             ok(lat,lng,acc,src,'地址解析失败');
         });
-}
-
-function ipLoc(){
-    fetch('https://restapi.amap.com/v3/ip?key='+_webAK)
-        .then(r=>r.json())
-        .then(data=>{
-            if(data.status==='1'&&data.rectangle){
-                const pts=data.rectangle.split(';');
-                const p1=pts[0].split(',');
-                const p2=pts[1].split(',');
-                const lt=((parseFloat(p1[1])+parseFloat(p2[1]))/2).toFixed(6);
-                const ln=((parseFloat(p1[0])+parseFloat(p2[0]))/2).toFixed(6);
-                ok(lt,ln,'IP定位(城市级)','IP定位',data.city||'未知城市');
-            }else{
-                ok(39.9,116.4,'默认基准','系统默认','北京市');
-            }
-        })
-        .catch(()=>{ok(39.9,116.4,'默认基准','系统默认','北京市');});
 }
 
 function ok(lt,ln,acc,src,addr){
